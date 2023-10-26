@@ -1,4 +1,5 @@
 import asyncio
+import websockets
 from collections import defaultdict
 import copy
 import json
@@ -56,6 +57,7 @@ class ConversableAgent(Agent):
         code_execution_config: Optional[Union[Dict, bool]] = None,
         llm_config: Optional[Union[Dict, bool]] = None,
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
+        websocket: Optional[websockets.WebSocketServerProtocol] = None,
     ):
         """
         Args:
@@ -114,6 +116,7 @@ class ConversableAgent(Agent):
 
         self._code_execution_config = {} if code_execution_config is None else code_execution_config
         self.human_input_mode = human_input_mode
+        self._websocket = websocket
         self._max_consecutive_auto_reply = (
             max_consecutive_auto_reply if max_consecutive_auto_reply is not None else self.MAX_CONSECUTIVE_AUTO_REPLY
         )
@@ -126,7 +129,9 @@ class ConversableAgent(Agent):
         self.register_reply([Agent, None], ConversableAgent.generate_oai_reply)
         self.register_reply([Agent, None], ConversableAgent.generate_code_execution_reply)
         self.register_reply([Agent, None], ConversableAgent.generate_function_call_reply)
-        self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
+        # self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
+        self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._websocket else ConversableAgent.check_termination_and_human_reply)
+
 
     def register_reply(
         self,
@@ -416,6 +421,67 @@ class ConversableAgent(Agent):
                 print(colored("*" * len(func_print), "green"), flush=True)
         print("\n", "-" * 80, flush=True, sep="")
 
+    async def _a_print_received_message(self, message: Union[Dict, str], sender: Agent):
+        # send the message received in json format
+        output = {}
+
+        # Sender and recipient information
+        output["sender"] = sender.name
+        output["recipient"] = self.name
+
+        role = message.get("role")
+        output["role"] = role
+
+        if role == "function":
+            output["function_name"] = message["name"]
+            output["function_response"] = message["content"]
+        else:
+            content = message.get("content")
+            if content is not None:
+                if "context" in message:
+                    content = oai.ChatCompletion.instantiate(
+                        content,
+                        message["context"],
+                        self.llm_config and self.llm_config.get("allow_format_str_template", False),
+                    )
+                output["content"] = content
+            if "function_call" in message:
+                output['suggested_function'] = {
+                    'name': message['function_call'].get('name', '(No function name found)'),
+                    'arguments': message['function_call'].get('arguments', '(No arguments found)')
+                }
+        
+        json_output = json.dumps(output)
+
+        await self._a_send_to_websocket(json_output)
+
+        # send the message received
+        # await self._a_send_to_websocket(colored(sender.name, "yellow") + "(to" + f"{self.name}):\n")
+        # if message.get("role") == "function":
+        #     func_print = f"***** Response from calling function \"{message['name']}\" *****"
+        #     await self._a_send_to_websocket(colored(func_print, "green"))
+        #     await self._a_send_to_websocket(message["content"])
+        #     await self._a_send_to_websocket(colored("*" * len(func_print), "green"))
+        # else:
+        #     content = message.get("content")
+        #     if content is not None:
+        #         if "context" in message:
+        #             content = oai.ChatCompletion.instantiate(
+        #                 content,
+        #                 message["context"],
+        #                 self.llm_config and self.llm_config.get("allow_format_str_template", False),
+        #             )
+        #         await self._a_send_to_websocket(content)
+        #     if "function_call" in message:
+        #         func_print = f"***** Suggested function Call: {message['function_call'].get('name', '(No function name found)')} *****"
+        #         await self._a_send_to_websocket(colored(func_print, "green"))
+        #         await self._a_send_to_websocket(
+        #             "Arguments: \n" +
+        #             message["function_call"].get("arguments", "(No arguments found)")
+        #         )
+        #         await self._a_send_to_websocket(colored("*" * len(func_print), "green"))
+        # await self._a_send_to_websocket("\n" + "-" * 80)
+
     def _process_received_message(self, message, sender, silent):
         message = self._message_to_dict(message)
         # When the agent receives a message, the role of the message is "user". (If 'role' exists and is 'function', it will remain unchanged.)
@@ -426,6 +492,17 @@ class ConversableAgent(Agent):
             )
         if not silent:
             self._print_received_message(message, sender)
+
+    async def _a_process_received_message(self, message, sender, silent):
+        message = self._message_to_dict(message)
+        # When the agent receives a message, the role of the message is "user". (If 'role' exists and is 'function', it will remain unchanged.)
+        valid = self._append_oai_message(message, "user", sender)
+        if not valid:
+            raise ValueError(
+                "Received message can't be converted into a valid ChatCompletion message. Either content or function_call must be provided."
+            )
+        if not silent:
+            await self._a_print_received_message(message, sender)
 
     def receive(
         self,
@@ -492,7 +569,7 @@ class ConversableAgent(Agent):
         Raises:
             ValueError: if the message can't be converted into a valid ChatCompletion message.
         """
-        self._process_received_message(message, sender, silent)
+        await self._a_process_received_message(message, sender, silent)
         if request_reply is False or request_reply is None and self.reply_at_receive[sender] is False:
             return
         reply = await self.a_generate_reply(sender=sender)
@@ -552,6 +629,7 @@ class ConversableAgent(Agent):
         """
         self._prepare_chat(recipient, clear_history)
         await self.a_send(self.generate_init_message(**context), recipient, silent=silent)
+        await self._a_close_websocket()
 
     def reset(self):
         """Reset the agent."""
@@ -731,6 +809,77 @@ class ConversableAgent(Agent):
             print(colored("\n>>>>>>>> USING AUTO REPLY...", "red"), flush=True)
 
         return False, None
+    
+    async def a_check_termination_and_human_reply(
+        self,
+        messages: Optional[List[Dict]] = None,
+        sender: Optional[Agent] = None,
+        config: Optional[Any] = None,
+    ) -> Tuple[bool, Union[str, Dict, None]]:
+        """Check if the conversation should be terminated, and if human reply is provided."""
+        if config is None:
+            config = self
+        if messages is None:
+            messages = self._oai_messages[sender]
+        message = messages[-1]
+        reply = ""
+        no_human_input_msg = ""
+        if self.human_input_mode == "ALWAYS":
+            reply = await self.a_get_human_input(
+                f"Provide feedback to {sender.name}. Press enter to skip and use auto-reply, or type 'exit' to end the conversation: "
+            )
+            no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+            # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+            reply = reply if reply or not self._is_termination_msg(message) else "exit"
+        else:
+            if self._consecutive_auto_reply_counter[sender] >= self._max_consecutive_auto_reply_dict[sender]:
+                if self.human_input_mode == "NEVER":
+                    reply = "exit"
+                else:
+                    # self.human_input_mode == "TERMINATE":
+                    terminate = self._is_termination_msg(message)
+                    reply = await self.a_get_human_input(
+                        f"Please give feedback to {sender.name}. Press enter or type 'exit' to stop the conversation: "
+                        if terminate
+                        else f"Please give feedback to {sender.name}. Press enter to skip and use auto-reply, or type 'exit' to stop the conversation: "
+                    )
+                    no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+                    # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+                    reply = reply if reply or not terminate else "exit"
+            elif self._is_termination_msg(message):
+                if self.human_input_mode == "NEVER":
+                    reply = "exit"
+                else:
+                    # self.human_input_mode == "TERMINATE":
+                    reply = await self.a_get_human_input(
+                        f"Please give feedback to {sender.name}. Press enter or type 'exit' to stop the conversation: "
+                    )
+                    no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+                    # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+                    reply = reply or "exit"
+
+        # print the no_human_input_msg
+        if no_human_input_msg:
+            await self._a_send_to_websocket(colored(f"\n>>>>>>>> {no_human_input_msg}", "red"))
+
+        # stop the conversation
+        if reply == "exit":
+            # reset the consecutive_auto_reply_counter
+            self._consecutive_auto_reply_counter[sender] = 0
+            return True, None
+
+        # send the human reply
+        if reply or self._max_consecutive_auto_reply_dict[sender] == 0:
+            # reset the consecutive_auto_reply_counter
+            self._consecutive_auto_reply_counter[sender] = 0
+            return True, reply
+
+        # increment the consecutive_auto_reply_counter
+        self._consecutive_auto_reply_counter[sender] += 1
+        if self.human_input_mode != "NEVER":
+            await self._a_send_to_websocket(colored("\n>>>>>>>> USING AUTO REPLY...", "red"))
+
+        return False, None
 
     def generate_reply(
         self,
@@ -867,6 +1016,28 @@ class ConversableAgent(Agent):
         """
         reply = input(prompt)
         return reply
+    
+    async def a_get_human_input(self, prompt: str) -> str:
+        """(async) Get human input.
+
+        Override this method to customize the way to get human input.
+
+        Args:
+            prompt (str): prompt for the human input.
+
+        Returns:
+            str: human input.
+        """
+        if self._websocket is not None:
+            sys_data = json.dumps({"sender": "System", "content": prompt})
+            await self._a_send_to_websocket(sys_data)
+
+            reponse = await self._websocket.recv()
+            response_json = json.loads(reponse)
+            reply = response_json.get("user_input", "")
+            return reply
+        else:
+            raise Exception("No websocket connection available.")
 
     def run_code(self, code, **kwargs):
         """Run the code and return the result.
@@ -1017,3 +1188,21 @@ class ConversableAgent(Agent):
             function_map: a dictionary mapping function names to functions.
         """
         self._function_map.update(function_map)
+
+    # async def a_connect_to_websocket(self):
+    #     if self._websocket_url is None:
+    #         raise ValueError("Websocket URL is not provided.")
+    #     else:
+    #         self._websocket_client = await websockets.connect(self._websocket_url)
+
+    async def _a_send_to_websocket(self, message: str):
+        if self._websocket is None:
+            raise ValueError("No WebSocket connection provided.")
+        else:
+            await self._websocket.send(message)
+    
+    async def _a_close_websocket(self):
+        try:
+            await self._websocket.close()
+        except Exception as e:
+            print(f"Error while closing WebSocket: {e}")

@@ -1,5 +1,6 @@
 from .conversable_agent import ConversableAgent
 from typing import Callable, Dict, Optional, Union
+import websockets
 
 
 class UserProxyAgent(ConversableAgent):
@@ -26,6 +27,7 @@ class UserProxyAgent(ConversableAgent):
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
         llm_config: Optional[Union[Dict, bool]] = False,
         system_message: Optional[str] = "",
+        websocket: Optional[websockets.WebSocketServerProtocol] = None,
     ):
         """
         Args:
@@ -79,4 +81,5 @@ class UserProxyAgent(ConversableAgent):
             code_execution_config,
             llm_config,
             default_auto_reply,
+            websocket,
         )
