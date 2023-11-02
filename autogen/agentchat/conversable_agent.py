@@ -1,5 +1,6 @@
 import asyncio
 import websockets
+import socketio
 from collections import defaultdict
 import copy
 import json
@@ -25,6 +26,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 
 class ConversableAgent(Agent):
     """(In preview) A class for generic conversable agents which can be configured as assistant or user proxy.
@@ -57,7 +59,12 @@ class ConversableAgent(Agent):
         code_execution_config: Optional[Union[Dict, bool]] = None,
         llm_config: Optional[Union[Dict, bool]] = None,
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
-        websocket: Optional[websockets.WebSocketServerProtocol] = None,
+        # websocket: Optional[websockets.WebSocketServerProtocol] = None,
+        sio: Optional[socketio.AsyncServer] = None,
+        sid: Optional[str] = None,
+        # session_store: Optional[Dict] = None,
+        human_input_data: Optional[Dict] = None,
+        human_input_event: Optional[asyncio.Event] = None,
     ):
         """
         Args:
@@ -116,7 +123,18 @@ class ConversableAgent(Agent):
 
         self._code_execution_config = {} if code_execution_config is None else code_execution_config
         self.human_input_mode = human_input_mode
-        self._websocket = websocket
+        # self._websocket = websocket
+        self._sio = sio
+        self._sid = sid
+        # self._sio.on('user_input_follow', self._on_user_input_follow)
+        # print(session_store)
+        # self._session_data = session_store.get(self._sid)
+        # self._human_input_event = self._session_data["human_input_event"]
+        # self._human_input_data = self._session_data["human_input_data"]
+        self._human_input_data = human_input_data
+        self._human_input_event = human_input_event
+        # !!
+        self.loop = asyncio.get_event_loop()
         self._max_consecutive_auto_reply = (
             max_consecutive_auto_reply if max_consecutive_auto_reply is not None else self.MAX_CONSECUTIVE_AUTO_REPLY
         )
@@ -130,7 +148,8 @@ class ConversableAgent(Agent):
         self.register_reply([Agent, None], ConversableAgent.generate_code_execution_reply)
         self.register_reply([Agent, None], ConversableAgent.generate_function_call_reply)
         # self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
-        self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._websocket else ConversableAgent.check_termination_and_human_reply)
+        # self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._websocket else ConversableAgent.check_termination_and_human_reply)
+        self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._sid else ConversableAgent.check_termination_and_human_reply)
 
 
     def register_reply(
@@ -450,10 +469,8 @@ class ConversableAgent(Agent):
                     'name': message['function_call'].get('name', '(No function name found)'),
                     'arguments': message['function_call'].get('arguments', '(No arguments found)')
                 }
-        
-        json_output = json.dumps(output)
 
-        await self._a_send_to_websocket(json_output)
+        await self._a_send_to_websocket(output)
 
         # send the message received
         # await self._a_send_to_websocket(colored(sender.name, "yellow") + "(to" + f"{self.name}):\n")
@@ -860,7 +877,9 @@ class ConversableAgent(Agent):
 
         # print the no_human_input_msg
         if no_human_input_msg:
-            await self._a_send_to_websocket(colored(f"\n>>>>>>>> {no_human_input_msg}", "red"))
+            pass
+            # * We dont need to send this message to the websocket
+            # await self._a_send_to_websocket({"sender": "System", "content": no_human_input_msg})
 
         # stop the conversation
         if reply == "exit":
@@ -877,7 +896,9 @@ class ConversableAgent(Agent):
         # increment the consecutive_auto_reply_counter
         self._consecutive_auto_reply_counter[sender] += 1
         if self.human_input_mode != "NEVER":
-            await self._a_send_to_websocket(colored("\n>>>>>>>> USING AUTO REPLY...", "red"))
+            pass
+            # * We dont need to print this line to the websocket
+            # await self._a_send_to_websocket({"sender": "System", "content": "Using AUTO REPLY..."})
 
         return False, None
 
@@ -1028,16 +1049,48 @@ class ConversableAgent(Agent):
         Returns:
             str: human input.
         """
-        if self._websocket is not None:
-            sys_data = json.dumps({"sender": "System", "content": prompt})
+        if self._sid is not None:
+            sys_data = {"sender": "System", "content": prompt}
+            # !!DEBUG LOGGING!!
+            print(f"DEBUG: a_get_human_input: sys_data: {sys_data}")
             await self._a_send_to_websocket(sys_data)
 
-            reponse = await self._websocket.recv()
-            response_json = json.loads(reponse)
-            reply = response_json.get("user_input", "")
-            return reply
+            #  TODO: Consider adding try catch for timeout
+            # inside a_get_human_input
+            print("DEBUG: About to wait for _human_input_event")
+            # TODO: This await is a problem or wait()
+            await self._human_input_event.wait()
+            print("DEBUG: Done waiting for _human_input_event")
+            
+            print("DEBUG: About to clear _human_input_event")
+            self._human_input_event.clear()
+            print("DEBUG: Cleared _human_input_event")
+
+            return self._human_input_data
         else:
             raise Exception("No websocket connection available.")
+        
+    # async def a_get_human_input(self, prompt: str) -> str:
+    #     """(async) Get human input.
+
+    #     Override this method to customize the way to get human input.
+
+    #     Args:
+    #         prompt (str): prompt for the human input.
+
+    #     Returns:
+    #         str: human input.
+    #     """
+    #     if self._websocket is not None:
+    #         sys_data = json.dumps({"sender": "System", "content": prompt})
+    #         await self._a_send_to_websocket(sys_data)
+
+    #         reponse = await self._websocket.recv()
+    #         response_json = json.loads(reponse)
+    #         reply = response_json.get("user_input", "")
+    #         return reply
+    #     else:
+    #         raise Exception("No websocket connection available.")
 
     def run_code(self, code, **kwargs):
         """Run the code and return the result.
@@ -1195,14 +1248,55 @@ class ConversableAgent(Agent):
     #     else:
     #         self._websocket_client = await websockets.connect(self._websocket_url)
 
-    async def _a_send_to_websocket(self, message: str):
-        if self._websocket is None:
+    async def _a_send_to_websocket(self, message: Dict):
+        if self._sid is None:
             raise ValueError("No WebSocket connection provided.")
         else:
-            await self._websocket.send(message)
+            # !!DEBUG LOGGING!!
+
+            try:
+                print(f"DEBUG: _a_send_to_websocket: message: {message}, {type(message)} emitting to {self._sid}")
+                await self._sio.emit(event='message', data=message, room=self._sid)
+                # print(f"DEBUG: _a_send_to_websocket: message: {message}, emitting to {self._sid}")
+            except Exception as e:
+                print(f"Error while sending message to WebSocket: {e}")
     
     async def _a_close_websocket(self):
         try:
-            await self._websocket.close()
+            # !!DEBUG LOGGING!!
+            print(f"DEBUG: _a_close_websocket: sid: {self._sid}")
+            await self._sio.disconnect(self._sid)
         except Exception as e:
             print(f"Error while closing WebSocket: {e}")
+
+    # async def _a_send_to_websocket(self, message: str):
+    #     if self._websocket is None:
+    #         raise ValueError("No WebSocket connection provided.")
+    #     else:
+    #         await self._websocket.send(message)
+    
+    # async def _a_close_websocket(self):
+    #     try:
+    #         await self._websocket.close()
+    #     except Exception as e:
+    #         print(f"Error while closing WebSocket: {e}")
+
+    def setUserInput(self, data):
+        self._human_input_data = data
+        self.loop.call_soon_threadsafe(self._human_input_event.set)
+        print(f"DEBUG: _on_user_input_follow: user_input: {self._human_input_data}")
+
+    # async def _on_user_input_follow(self, sid, data):
+    #     print(f"DEBUG: _on_user_input_follow: sid: {sid}, data: {data}, self.sid: {self._sid}")
+    #     if sid != self._sid:
+    #         return  # Ignore messages from other clients
+    #     user_input = data.get("user_input")
+    #     self._human_input_data = user_input  # Store received data
+    #     # !!DEBUG LOGGING!! nuo dao init xia mian
+    #     # self.loop = asyncio.get_event_loop()
+    #     print(f"DEBUG: _on_user_input_follow: user_input: {self._human_input_data}")
+    #     # inside _on_user_input_follow
+    #     print("DEBUG: About to set _human_input_event")
+    #     self.loop.call_soon_threadsafe(self._human_input_event.set)
+    #     # self._human_input_event.set()
+    #     print("DEBUG: Set _human_input_event")

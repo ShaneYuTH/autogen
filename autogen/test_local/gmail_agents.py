@@ -20,11 +20,12 @@ def process_gmail_request(message):
 
     gmail_assistant = autogen.AssistantAgent(
         name="gmail_assistant",
-        system_message='''You are the Gmail Assistant. 
-        Always check for <SUCCESS> or <ERROR> in the context, if you see either, you must also add <SUCCESS> or <ERROR> to the end of your response.
+        system_message='''You are the Gmail Assistant. You are responsible for processing Gmail tasks.
+        Always check for <SUCCESS> or <ERROR> in the context, your response must ends with <SUCCESS> or <ERROR> if you see <SUCCESS> or <ERROR> in the context.
         For Gmail tasks, only use the functions you have been provided with. Do not assume any functions.
         
-        If you receive content containg email id, you must keep it as part of your response. 
+        You must include 'id' at the first of each mail at anytime. If there is no id present, you should put it as NULL.
+
         When writing emails on user's behalf, do not assume anything that is not provided to you. This includes but not limit to recipients, subject, body, and attachment of the email.
         If you need more information to complete the task, reply "REQUIRE ADDITIONAL INFO".''',
         llm_config=gmail_llm_config,

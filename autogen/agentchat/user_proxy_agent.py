@@ -1,6 +1,8 @@
+import asyncio
 from .conversable_agent import ConversableAgent
 from typing import Callable, Dict, Optional, Union
 import websockets
+import socketio
 
 
 class UserProxyAgent(ConversableAgent):
@@ -27,7 +29,12 @@ class UserProxyAgent(ConversableAgent):
         default_auto_reply: Optional[Union[str, Dict, None]] = "",
         llm_config: Optional[Union[Dict, bool]] = False,
         system_message: Optional[str] = "",
-        websocket: Optional[websockets.WebSocketServerProtocol] = None,
+        # websocket: Optional[websockets.WebSocketServerProtocol] = None,
+        sio: Optional[socketio.AsyncServer] = None,
+        sid: Optional[str] = None,
+        # session_store: Optional[Dict] = None,
+        human_input_data: Optional[Dict] = None,
+        human_input_event: Optional[asyncio.Event] = None,
     ):
         """
         Args:
@@ -81,5 +88,10 @@ class UserProxyAgent(ConversableAgent):
             code_execution_config,
             llm_config,
             default_auto_reply,
-            websocket,
+            # websocket,
+            sio,
+            sid,
+            # session_store,
+            human_input_data,
+            human_input_event,
         )

@@ -15,13 +15,13 @@ FUNCTIONS = [
                         "type": "string",
                         "description": "The channel to post the message to."
                     },
-                    "text": {
+                    "content": {
                         "type": "string",
-                        "description": "The message text."
+                        "description": "The message content."
                     }
                 }
         },
-        "required": ["channel", "text"]
+        "required": ["channel", "content"]
     }
 ]
 
@@ -37,12 +37,12 @@ def slack_auth():
     return client
 
 
-def slack_post_message(channel, text):
+def slack_post_message(channel, content):
     """Post a message to a specified Slack channel.
 
     Args:
         channel (str): The channel to post the message to.
-        text (str): The message text.
+        content (str): The message content.
 
     Returns:
         dict: The API response data in case of success.
@@ -52,8 +52,8 @@ def slack_post_message(channel, text):
     client = slack_auth()
 
     try:
-        response = client.chat_postMessage(channel=channel, text=text)
-        return response.data + " <SUCCESS>"
+        response = client.chat_postMessage(channel=channel, text=content)
+        return str(response.data) + " <SUCCESS>"
     except SlackApiError as e:
         logging.error(f"Error posting message: {e.response['error']}")
         return "<ERROR>"
