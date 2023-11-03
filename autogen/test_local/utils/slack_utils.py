@@ -31,7 +31,7 @@ def slack_auth():
     with open("slack_token.json") as f:
         data = json.load(f)
 
-    token = data["slack_user_token"]
+    token = data["user_oauth_token"]
     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
     client = WebClient(
