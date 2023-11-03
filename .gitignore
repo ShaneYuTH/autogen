@@ -164,3 +164,7 @@ key_openai.txt
 key_aoai.txt
 base_aoai.txt
 wolfram.txt
+
+credentials.json
+token.json
+slack_token.json

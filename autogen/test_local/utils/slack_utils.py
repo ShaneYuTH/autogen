@@ -3,6 +3,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 import ssl
 import certifi
+import json
 
 FUNCTIONS = [
     {
@@ -27,11 +28,14 @@ FUNCTIONS = [
 
 
 def slack_auth():
+    with open("slack_token.json") as f:
+        data = json.load(f)
+
+    token = data["slack_user_token"]
     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
     client = WebClient(
-        # TODO: Temperary, need to change token to a seperate file
-        token="xoxp-5984641757943-5996253060773-5999338361490-e6005c577c904eef28b3763fba154ff2", ssl=ssl_context
+        token=token, ssl=ssl_context
     )
 
     return client
