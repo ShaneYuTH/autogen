@@ -149,8 +149,9 @@ class ConversableAgent(Agent):
         self.register_reply([Agent, None], ConversableAgent.generate_function_call_reply)
         # self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
         # self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._websocket else ConversableAgent.check_termination_and_human_reply)
-        self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply if self._sid else ConversableAgent.check_termination_and_human_reply)
-
+        self.register_reply([Agent, None], ConversableAgent.a_check_termination_and_human_reply)
+        self.register_reply([Agent, None], ConversableAgent.generate_async_function_call_reply)
+        self.register_reply([Agent, None], ConversableAgent.check_termination_and_human_reply)
 
     def register_reply(
         self,
@@ -756,6 +757,28 @@ class ConversableAgent(Agent):
             return True, func_return
         return False, None
 
+    async def generate_async_function_call_reply(
+        self,
+        messages: Optional[List[Dict]] = None,
+        sender: Optional[Agent] = None,
+        config: Optional[Any] = None,
+    ):
+        """Generate a reply using async function call."""
+        if config is None:
+            config = self
+        if messages is None:
+            messages = self._oai_messages[sender]
+        message = messages[-1]
+        if "function_call" in message:
+            func_call = message["function_call"]
+            func_name = func_call.get("name", "")
+            func = self._function_map.get(func_name, None)
+            if func and asyncio.coroutines.iscoroutinefunction(func):
+                _, func_return = await self.a_execute_function(func_call)
+                return True, func_return
+
+        return False, None
+
     def check_termination_and_human_reply(
         self,
         messages: Optional[List[Dict]] = None,
@@ -899,6 +922,77 @@ class ConversableAgent(Agent):
             pass
             # * We dont need to print this line to the websocket
             # await self._a_send_to_websocket({"sender": "System", "content": "Using AUTO REPLY..."})
+
+        return False, None
+
+    async def a_check_termination_and_human_reply(
+        self,
+        messages: Optional[List[Dict]] = None,
+        sender: Optional[Agent] = None,
+        config: Optional[Any] = None,
+    ) -> Tuple[bool, Union[str, Dict, None]]:
+        """(async) Check if the conversation should be terminated, and if human reply is provided."""
+        if config is None:
+            config = self
+        if messages is None:
+            messages = self._oai_messages[sender]
+        message = messages[-1]
+        reply = ""
+        no_human_input_msg = ""
+        if self.human_input_mode == "ALWAYS":
+            reply = await self.a_get_human_input(
+                f"Provide feedback to {sender.name}. Press enter to skip and use auto-reply, or type 'exit' to end the conversation: "
+            )
+            no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+            # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+            reply = reply if reply or not self._is_termination_msg(message) else "exit"
+        else:
+            if self._consecutive_auto_reply_counter[sender] >= self._max_consecutive_auto_reply_dict[sender]:
+                if self.human_input_mode == "NEVER":
+                    reply = "exit"
+                else:
+                    # self.human_input_mode == "TERMINATE":
+                    terminate = self._is_termination_msg(message)
+                    reply = await self.a_get_human_input(
+                        f"Please give feedback to {sender.name}. Press enter or type 'exit' to stop the conversation: "
+                        if terminate
+                        else f"Please give feedback to {sender.name}. Press enter to skip and use auto-reply, or type 'exit' to stop the conversation: "
+                    )
+                    no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+                    # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+                    reply = reply if reply or not terminate else "exit"
+            elif self._is_termination_msg(message):
+                if self.human_input_mode == "NEVER":
+                    reply = "exit"
+                else:
+                    # self.human_input_mode == "TERMINATE":
+                    reply = await self.a_get_human_input(
+                        f"Please give feedback to {sender.name}. Press enter or type 'exit' to stop the conversation: "
+                    )
+                    no_human_input_msg = "NO HUMAN INPUT RECEIVED." if not reply else ""
+                    # if the human input is empty, and the message is a termination message, then we will terminate the conversation
+                    reply = reply or "exit"
+
+        # print the no_human_input_msg
+        if no_human_input_msg:
+            print(colored(f"\n>>>>>>>> {no_human_input_msg}", "red"), flush=True)
+
+        # stop the conversation
+        if reply == "exit":
+            # reset the consecutive_auto_reply_counter
+            self._consecutive_auto_reply_counter[sender] = 0
+            return True, None
+
+        # send the human reply
+        if reply or self._max_consecutive_auto_reply_dict[sender] == 0:
+            # reset the consecutive_auto_reply_counter
+            self._consecutive_auto_reply_counter[sender] = 0
+            return True, reply
+
+        # increment the consecutive_auto_reply_counter
+        self._consecutive_auto_reply_counter[sender] += 1
+        if self.human_input_mode != "NEVER":
+            print(colored("\n>>>>>>>> USING AUTO REPLY...", "red"), flush=True)
 
         return False, None
 
@@ -1092,6 +1186,20 @@ class ConversableAgent(Agent):
     #     else:
     #         raise Exception("No websocket connection available.")
 
+    async def a_get_human_input(self, prompt: str) -> str:
+        """(Async) Get human input.
+
+        Override this method to customize the way to get human input.
+
+        Args:
+            prompt (str): prompt for the human input.
+
+        Returns:
+            str: human input.
+        """
+        reply = input(prompt)
+        return reply
+
     def run_code(self, code, **kwargs):
         """Run the code and return the result.
 
@@ -1226,6 +1334,56 @@ class ConversableAgent(Agent):
             "content": str(content),
         }
 
+    async def a_execute_function(self, func_call):
+        """Execute an async function call and return the result.
+
+        Override this function to modify the way async functions are executed.
+
+        Args:
+            func_call: a dictionary extracted from openai message at key "function_call" with keys "name" and "arguments".
+
+        Returns:
+            A tuple of (is_exec_success, result_dict).
+            is_exec_success (boolean): whether the execution is successful.
+            result_dict: a dictionary with keys "name", "role", and "content". Value of "role" is "function".
+        """
+        func_name = func_call.get("name", "")
+        func = self._function_map.get(func_name, None)
+
+        is_exec_success = False
+        if func is not None:
+            # Extract arguments from a json-like string and put it into a dict.
+            input_string = self._format_json_str(func_call.get("arguments", "{}"))
+            try:
+                arguments = json.loads(input_string)
+            except json.JSONDecodeError as e:
+                arguments = None
+                content = f"Error: {e}\n You argument should follow json format."
+
+            # Try to execute the function
+            if arguments is not None:
+                print(
+                    colored(f"\n>>>>>>>> EXECUTING ASYNC FUNCTION {func_name}...", "magenta"),
+                    flush=True,
+                )
+                try:
+                    if asyncio.coroutines.iscoroutinefunction(func):
+                        content = await func(**arguments)
+                    else:
+                        # Fallback to sync function if the function is not async
+                        content = func(**arguments)
+                    is_exec_success = True
+                except Exception as e:
+                    content = f"Error: {e}"
+        else:
+            content = f"Error: Function {func_name} not found."
+
+        return is_exec_success, {
+            "name": func_name,
+            "role": "function",
+            "content": str(content),
+        }
+
     def generate_init_message(self, **context) -> Union[str, Dict]:
         """Generate the initial message for the agent.
 
@@ -1300,3 +1458,11 @@ class ConversableAgent(Agent):
     #     self.loop.call_soon_threadsafe(self._human_input_event.set)
     #     # self._human_input_event.set()
     #     print("DEBUG: Set _human_input_event")
+    def can_execute_function(self, name: str) -> bool:
+        """Whether the agent can execute the function."""
+        return name in self._function_map
+
+    @property
+    def function_map(self) -> Dict[str, Callable]:
+        """Return the function map."""
+        return self._function_map

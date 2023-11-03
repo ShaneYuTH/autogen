@@ -168,3 +168,5 @@ wolfram.txt
 credentials.json
 token.json
 slack_token.json
+# DB on disk for TeachableAgent
+tmp/
