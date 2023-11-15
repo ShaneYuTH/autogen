@@ -132,9 +132,9 @@ class GroupChatManager(ConversableAgent):
         )
         # Order of register_reply is important.
         # Allow sync chat if initiated using initiate_chat
-        self.register_reply(Agent, GroupChatManager.run_chat, config=groupchat, reset_config=GroupChat.reset)
+        # self.register_reply(Agent, GroupChatManager.run_chat, config=groupchat, reset_config=GroupChat.reset)
         # Allow async chat if initiated using a_initiate_chat
-        self.register_reply(Agent, GroupChatManager.a_run_chat, config=groupchat, reset_config=GroupChat.reset)
+        self.register_reply(Agent, GroupChatManager.a_run_chat if self._sid else GroupChatManager.run_chat, config=groupchat, reset_config=GroupChat.reset)
 
         # self._random = random.Random(seed)
 

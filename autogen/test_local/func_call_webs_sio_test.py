@@ -87,7 +87,7 @@ async def connect(sid, environ):
         When reading emails on user's behalf (including presenting email content/summary to user),
         always label emails with priority (Priority: High/Medium/Low) and action required (Action required: Something/None) based on the content of the email.
         When presenting email, always follow the following format and never assume anything that's not provided to you:
-        1. ID: <id> Subject: <subject> (Priority: <priority>, Action required: <action required>) sent by <sender>
+        1. Subject: <subject> (Priority: <priority>, Action required: <action required>) sent by <sender>
         Content: <summarization of content>
         When writing emails on user's behalf, make sure you have the recipients(email address only), subject, body, and/or attachment of the email in the message before you continue to next step.
         If you need more information to complete the task, ask for more information. Do not assume anything that is not provided to you. This includes but not limit to recipients, subject, body, and/or attachment of the email.
