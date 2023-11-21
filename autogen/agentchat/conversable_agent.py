@@ -471,7 +471,7 @@ class ConversableAgent(Agent):
             content = message.get("content")
             if content is not None:
                 if "context" in message:
-                    content = oai.ChatCompletion.instantiate(
+                    content = OpenAIWrapper.instantiate(
                         content,
                         message["context"],
                         self.llm_config and self.llm_config.get("allow_format_str_template", False),
@@ -1440,7 +1440,7 @@ class ConversableAgent(Agent):
             try:
                 print(f"DEBUG: _a_send_to_websocket: message: {message}, {type(message)} emitting to {self._sid}")
                 await self._sio.emit(event='message', data=message, room=self._sid)
-                # print(f"DEBUG: _a_send_to_websocket: message: {message}, emitting to {self._sid}")
+                print(f"DEBUG: _a_send_to_websocket: message: {message}, emitting to {self._sid} done.")
             except Exception as e:
                 print(f"Error while sending message to WebSocket: {e}")
     
